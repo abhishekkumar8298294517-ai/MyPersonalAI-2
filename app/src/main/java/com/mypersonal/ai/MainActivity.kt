@@ -1,8 +1,10 @@
 package com.mypersonal.ai
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
@@ -13,20 +15,27 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,7 +49,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var dbHelper: MemoryDbHelper
 
     private val defaultPrompt =
-        "You are my personal, private AI assistant. Speak in natural Hinglish (mix of Hindi and English) like a smart, chill friend, but act with JARVIS-level efficiency. Keep replies short, direct, and helpful."
+        "You are JARVIS, my personal private AI assistant. Act with JARVIS-level efficiency and keep replies crisp, smart, and helpful."
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -122,7 +131,7 @@ class MainActivity : AppCompatActivity() {
         )
 
         val infoBuilder = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock Personal AI")
+            .setTitle("Unlock JARVIS AI")
             .setSubtitle("Verify Fingerprint or PIN")
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -143,21 +152,59 @@ class MainActivity : AppCompatActivity() {
 }
 
 @Composable
+fun JarvisCoreOrb(isActive: Boolean, isBgListening: Boolean) {
+    val infiniteTransition = rememberInfiniteTransition(label = "orb")
+    val pulse by infiniteTransition.animateFloat(
+        initialValue = 0.88f,
+        targetValue = if (isActive) 1.15f else 1.02f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = if (isActive) 600 else 1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse"
+    )
+
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(110.dp)) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val baseRadius = size.minDimension / 2.4f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        Color(0xFF00E5FF).copy(alpha = 0.35f),
+                        Color.Transparent
+                    )
+                ),
+                radius = baseRadius * pulse * 1.25f
+            )
+            drawCircle(
+                color = if (isBgListening) Color(0xFF00E5FF) else Color(0xFF4FC3F7),
+                radius = baseRadius * pulse,
+                style = Stroke(width = 6f)
+            )
+            drawCircle(
+                color = Color(0xFFFFD54F),
+                radius = baseRadius * 0.65f,
+                style = Stroke(width = 3f)
+            )
+            drawCircle(
+                color = Color(0xFF00E5FF).copy(alpha = 0.85f),
+                radius = baseRadius * 0.32f * pulse
+            )
+        }
+    }
+}
+
+@Composable
 fun LockedScreen(onUnlockClick: () -> Unit) {
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0F111A)) {
+    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0B0E17)) {
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = "Locked",
-                tint = Color(0xFF4FC3F7),
-                modifier = Modifier.size(64.dp)
-            )
+            JarvisCoreOrb(isActive = false, isBgListening = false)
             Spacer(modifier = Modifier.height(16.dp))
-            Text("Personal AI Locked", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text("JARVIS AI Locked", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
             Spacer(modifier = Modifier.height(20.dp))
             Button(onClick = onUnlockClick) {
                 Text("Unlock with Fingerprint / PIN")
@@ -176,13 +223,17 @@ fun AssistantScreen(
     onStopSpeak: () -> Unit,
     onLockNow: () -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
     var apiKey by remember { mutableStateOf(prefs.getString("api_key", "") ?: "") }
-    var assistantName by remember { mutableStateOf(prefs.getString("assistant_name", "MYRAA") ?: "MYRAA") }
+    var assistantName by remember { mutableStateOf(prefs.getString("assistant_name", "JARVIS") ?: "JARVIS") }
+    var wakeWord by remember { mutableStateOf(prefs.getString("wake_word", "jarvis") ?: "jarvis") }
+    var langMode by remember { mutableStateOf(prefs.getString("lang_mode", "Hinglish") ?: "Hinglish") }
     var systemPrompt by remember { mutableStateOf(prefs.getString("system_prompt", defaultPrompt) ?: defaultPrompt) }
     var lockEnabled by remember { mutableStateOf(prefs.getBoolean("lock_enabled", false)) }
+    var bgWakeEnabled by remember { mutableStateOf(prefs.getBoolean("bg_wake_enabled", false)) }
 
     var messages by remember { mutableStateOf(dbHelper.getRecentMessages(50)) }
     var memories by remember { mutableStateOf(dbHelper.getAllMemories()) }
@@ -192,18 +243,72 @@ fun AssistantScreen(
     var showSettings by remember { mutableStateOf(false) }
     var showMemoryDialog by remember { mutableStateOf(false) }
 
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        val micGranted = perms[Manifest.permission.RECORD_AUDIO] == true
+        if (micGranted && bgWakeEnabled) {
+            val svc = Intent(context, JarvisBackgroundService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(svc)
+            } else {
+                context.startService(svc)
+            }
+        }
+    }
+
+    LaunchedEffect(bgWakeEnabled) {
+        val svc = Intent(context, JarvisBackgroundService::class.java)
+        if (bgWakeEnabled) {
+            val hasMic = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasMic) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(svc)
+                } else {
+                    context.startService(svc)
+                }
+            } else {
+                val req = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    req.add(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                permissionLauncher.launch(req.toTypedArray())
+            }
+        } else {
+            context.stopService(svc)
+        }
+    }
+
     fun sendUserMessage(text: String) {
         val clean = text.trim()
         if (clean.isEmpty() || isThinking) return
         inputText = ""
         dbHelper.addMessage("user", clean)
         messages = dbHelper.getRecentMessages(50)
+
+        // Check phone automation first (WhatsApp, YouTube, Chrome, Open App, Alarm)
+        val actionResult = ActionExecutor.tryExecuteCommand(context, clean)
+        if (actionResult != null) {
+            dbHelper.addMessage("model", actionResult)
+            messages = dbHelper.getRecentMessages(50)
+            onSpeak(actionResult)
+            return
+        }
+
         isThinking = true
+        val langSuffix = if (langMode == "English") {
+            " Respond strictly in natural, smart English."
+        } else {
+            " Respond in natural Hinglish (mix of Hindi and English) like a smart, chill friend."
+        }
 
         scope.launch {
             val reply = GeminiClient.sendMessage(
                 apiKey = apiKey,
-                systemPrompt = systemPrompt,
+                systemPrompt = systemPrompt + langSuffix,
                 memories = memories,
                 history = messages.dropLast(1),
                 userMessage = clean
@@ -232,12 +337,21 @@ fun AssistantScreen(
     }
 
     Scaffold(
-        containerColor = Color(0xFF0F111A),
+        containerColor = Color(0xFF0B0E17),
         topBar = {
             TopAppBar(
-                title = { Text(assistantName, fontWeight = FontWeight.Bold) },
+                title = {
+                    Column {
+                        Text(assistantName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text(
+                            text = if (bgWakeEnabled) "Always-On: Say \"Hey $wakeWord\"" else "Tap Mic or type below",
+                            fontSize = 11.sp,
+                            color = if (bgWakeEnabled) Color(0xFF00E5FF) else Color.Gray
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF171A26),
+                    containerColor = Color(0xFF131826),
                     titleContentColor = Color.White
                 ),
                 actions = {
@@ -245,7 +359,7 @@ fun AssistantScreen(
                         Icon(Icons.Default.VolumeOff, contentDescription = "Stop Voice", tint = Color.White)
                     }
                     IconButton(onClick = { showMemoryDialog = true }) {
-                        Icon(Icons.Default.Psychology, contentDescription = "Memory", tint = Color(0xFF4FC3F7))
+                        Icon(Icons.Default.Psychology, contentDescription = "Memory", tint = Color(0xFF00E5FF))
                     }
                     if (lockEnabled) {
                         IconButton(onClick = onLockNow) {
@@ -264,6 +378,16 @@ fun AssistantScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Animated JARVIS Core Orb Header
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                JarvisCoreOrb(isActive = isThinking, isBgListening = bgWakeEnabled)
+            }
+
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -271,14 +395,15 @@ fun AssistantScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 12.dp)
+                contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 if (messages.isEmpty()) {
                     item {
                         Text(
-                            text = "Namaste! Settings icon par tap karke apni Gemini API key daalein, phir Mic dabakar baat karein.",
+                            text = "Try saying: \"YouTube par Phonk chalao\", \"WhatsApp par Hello bhejo\", ya Settings se Always-On Wake Word on karein.",
                             color = Color.Gray,
-                            modifier = Modifier.padding(16.dp)
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(12.dp)
                         )
                     }
                 }
@@ -289,7 +414,7 @@ fun AssistantScreen(
                         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
                     ) {
                         Surface(
-                            color = if (isUser) Color(0xFF1E88E5) else Color(0xFF232738),
+                            color = if (isUser) Color(0xFF0288D1) else Color(0xFF1A2033),
                             shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.widthIn(max = 290.dp)
                         ) {
@@ -304,7 +429,7 @@ fun AssistantScreen(
                 }
                 if (isThinking) {
                     item {
-                        Text("Soch raha hun...", color = Color(0xFF4FC3F7), modifier = Modifier.padding(8.dp))
+                        Text("Processing...", color = Color(0xFF00E5FF), modifier = Modifier.padding(8.dp))
                     }
                 }
             }
@@ -312,14 +437,14 @@ fun AssistantScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF171A26))
+                    .background(Color(0xFF131826))
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
-                    placeholder = { Text("Kuch likhein ya Mic dabayein...") },
+                    placeholder = { Text("Command bolein ya likhein...") },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
                     shape = RoundedCornerShape(24.dp)
@@ -330,7 +455,7 @@ fun AssistantScreen(
                         onClick = { sendUserMessage(inputText) },
                         modifier = Modifier
                             .size(48.dp)
-                            .background(Color(0xFF1E88E5), CircleShape)
+                            .background(Color(0xFF0288D1), CircleShape)
                     ) {
                         Icon(Icons.Default.Send, contentDescription = "Send", tint = Color.White)
                     }
@@ -359,14 +484,20 @@ fun AssistantScreen(
     if (showSettings) {
         var tempKey by remember { mutableStateOf(apiKey) }
         var tempName by remember { mutableStateOf(assistantName) }
+        var tempWake by remember { mutableStateOf(wakeWord) }
+        var tempLang by remember { mutableStateOf(langMode) }
         var tempPrompt by remember { mutableStateOf(systemPrompt) }
         var tempLock by remember { mutableStateOf(lockEnabled) }
+        var tempBgWake by remember { mutableStateOf(bgWakeEnabled) }
 
         AlertDialog(
             onDismissRequest = { showSettings = false },
-            title = { Text("Settings") },
+            title = { Text("JARVIS Settings") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     OutlinedTextField(
                         value = tempKey,
                         onValueChange = { tempKey = it },
@@ -380,11 +511,41 @@ fun AssistantScreen(
                         singleLine = true
                     )
                     OutlinedTextField(
-                        value = tempPrompt,
-                        onValueChange = { tempPrompt = it },
-                        label = { Text("Personality Prompt") },
-                        maxLines = 4
+                        value = tempWake,
+                        onValueChange = { tempWake = it },
+                        label = { Text("Wake Word (e.g., jarvis)") },
+                        singleLine = true
                     )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Voice Language:")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = tempLang == "Hinglish",
+                                onClick = { tempLang = "Hinglish" },
+                                label = { Text("Hinglish") }
+                            )
+                            FilterChip(
+                                selected = tempLang == "English",
+                                onClick = { tempLang = "English" },
+                                label = { Text("English") }
+                            )
+                        }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Background Wake-Word Mic")
+                            Text("Say 'Hey $tempWake' anytime", fontSize = 11.sp, color = Color.Gray)
+                        }
+                        Switch(checked = tempBgWake, onCheckedChange = { tempBgWake = it })
+                    }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -393,6 +554,12 @@ fun AssistantScreen(
                         Text("Fingerprint / PIN Lock")
                         Switch(checked = tempLock, onCheckedChange = { tempLock = it })
                     }
+                    OutlinedTextField(
+                        value = tempPrompt,
+                        onValueChange = { tempPrompt = it },
+                        label = { Text("Personality Prompt") },
+                        maxLines = 3
+                    )
                     TextButton(onClick = {
                         dbHelper.clearMessages()
                         messages = emptyList()
@@ -404,14 +571,20 @@ fun AssistantScreen(
             confirmButton = {
                 Button(onClick = {
                     apiKey = tempKey.trim()
-                    assistantName = tempName.trim().ifEmpty { "MYRAA" }
+                    assistantName = tempName.trim().ifEmpty { "JARVIS" }
+                    wakeWord = tempWake.trim().ifEmpty { "jarvis" }
+                    langMode = tempLang
                     systemPrompt = tempPrompt.trim().ifEmpty { defaultPrompt }
                     lockEnabled = tempLock
+                    bgWakeEnabled = tempBgWake
                     prefs.edit()
                         .putString("api_key", apiKey)
                         .putString("assistant_name", assistantName)
+                        .putString("wake_word", wakeWord)
+                        .putString("lang_mode", langMode)
                         .putString("system_prompt", systemPrompt)
                         .putBoolean("lock_enabled", lockEnabled)
+                        .putBoolean("bg_wake_enabled", bgWakeEnabled)
                         .apply()
                     showSettings = false
                 }) { Text("Save") }
@@ -472,4 +645,3 @@ fun AssistantScreen(
         )
     }
 }
-
