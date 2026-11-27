@@ -34,13 +34,14 @@ object GeminiClient {
         }
     }
 
-    private fun resolveActiveModel(cleanKey: String): Pair<String?, String?> {
+    private fun getCandidateModels(cleanKey: String): Pair<List<String>, String?> {
         if (cachedForKey == cleanKey && cachedModelPath != null) {
-            return Pair(cachedModelPath, null)
+            return Pair(listOf(cachedModelPath!!), null)
         }
 
         val listRequest = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey")
+            .url("https://generativelanguage.googleapis.com/v1beta/models")
+            .addHeader("x-goog-api-key", cleanKey)
             .get()
             .build()
 
@@ -48,44 +49,44 @@ object GeminiClient {
             client.newCall(listRequest).execute().use { response ->
                 val bodyStr = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    return Pair(null, "API Error (${response.code}): ${extractGoogleError(bodyStr)}")
+                    return Pair(emptyList(), "API Error (${response.code}): ${extractGoogleError(bodyStr)}")
                 }
 
                 val models = JSONObject(bodyStr).optJSONArray("models") ?: JSONArray()
-                var bestFlashModel: String? = null
-                var fallbackGeminiModel: String? = null
+                val flashModels = mutableListOf<String>()
+                val otherGeminiModels = mutableListOf<String>()
 
                 for (i in 0 until models.length()) {
                     val obj = models.optJSONObject(i) ?: continue
                     val name = obj.optString("name") // e.g., "models/gemini-..."
                     val methods = obj.optJSONArray("supportedGenerationMethods")?.toString().orEmpty()
 
-                    if (methods.contains("generateContent") && name.contains("gemini", ignoreCase = true)) {
-                        if (fallbackGeminiModel == null) {
-                            fallbackGeminiModel = name
-                        }
-                        if (name.contains("flash", ignoreCase = true) &&
-                            !name.contains("lite", ignoreCase = true) &&
-                            !name.contains("image", ignoreCase = true) &&
-                            !name.contains("audio", ignoreCase = true)
-                        ) {
-                            bestFlashModel = name
-                            break
+                    if (methods.contains("generateContent") &&
+                        name.contains("gemini", ignoreCase = true) &&
+                        !name.contains("image", ignoreCase = true) &&
+                        !name.contains("audio", ignoreCase = true) &&
+                        !name.contains("tts", ignoreCase = true) &&
+                        !name.contains("robotics", ignoreCase = true) &&
+                        !name.contains("computer-use", ignoreCase = true)
+                    ) {
+                        if (name.contains("flash", ignoreCase = true)) {
+                            flashModels.add(name)
+                        } else {
+                            otherGeminiModels.add(name)
                         }
                     }
                 }
 
-                val selected = bestFlashModel ?: fallbackGeminiModel
-                if (selected != null) {
-                    cachedModelPath = selected
-                    cachedForKey = cleanKey
-                    Pair(selected, null)
+                // Prefer newest flash models first, then other gemini models
+                val ordered = (flashModels.reversed() + otherGeminiModels.reversed()).distinct()
+                if (ordered.isEmpty()) {
+                    Pair(emptyList(), "Is API key ke liye koi supported Gemini text model nahi mila.")
                 } else {
-                    Pair(null, "Is API key ke liye koi supported Gemini text model nahi mila.")
+                    Pair(ordered, null)
                 }
             }
         } catch (e: Exception) {
-            Pair(null, "Network error: ${e.localizedMessage ?: "Internet check karein"}")
+            Pair(emptyList(), "Network error: ${e.localizedMessage ?: "Internet check karein"}")
         }
     }
 
@@ -96,14 +97,14 @@ object GeminiClient {
         history: List<ChatMessage>,
         userMessage: String
     ): String = withContext(Dispatchers.IO) {
-        val cleanKey = apiKey.trim()
+        val cleanKey = apiKey.replace(Regex("\\s+"), "").trim()
         if (cleanKey.isEmpty()) {
             return@withContext "Pehle Settings icon par tap karke apni Gemini API key save karein."
         }
 
-        val (modelPath, resolveError) = resolveActiveModel(cleanKey)
-        if (modelPath == null) {
-            return@withContext resolveError ?: "Model load nahi ho paya."
+        val (modelsToTry, listError) = getCandidateModels(cleanKey)
+        if (modelsToTry.isEmpty()) {
+            return@withContext listError ?: "Models fetch nahi ho paye."
         }
 
         val memoryBlock = if (memories.isNotEmpty()) {
@@ -142,35 +143,48 @@ object GeminiClient {
             put("contents", contentsArray)
         }
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/$modelPath:generateContent?key=$cleanKey"
-        val request = Request.Builder()
-            .url(url)
-            .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
-            .build()
+        val bodyBytes = requestBodyJson.toString().toRequestBody(jsonMediaType)
+        var lastError = "Koi bhi model respond nahi kar paya."
 
-        try {
-            client.newCall(request).execute().use { response ->
-                val bodyStr = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    cachedModelPath = null
-                    return@withContext "API Error (${response.code}): ${extractGoogleError(bodyStr)}"
-                }
-                val json = JSONObject(bodyStr)
-                val text = json.optJSONArray("candidates")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("content")
-                    ?.optJSONArray("parts")
-                    ?.optJSONObject(0)
-                    ?.optString("text")
+        for (modelPath in modelsToTry) {
+            val url = "https://generativelanguage.googleapis.com/v1beta/$modelPath:generateContent"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("x-goog-api-key", cleanKey)
+                .post(bodyBytes)
+                .build()
 
-                if (text.isNullOrBlank()) {
-                    "Mujhe abhi koi response nahi mila, dubara try karein."
-                } else {
-                    text.trim()
+            try {
+                client.newCall(request).execute().use { response ->
+                    val bodyStr = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val text = JSONObject(bodyStr)
+                            .optJSONArray("candidates")
+                            ?.optJSONObject(0)
+                            ?.optJSONObject("content")
+                            ?.optJSONArray("parts")
+                            ?.optJSONObject(0)
+                            ?.optString("text")
+
+                        if (!text.isNullOrBlank()) {
+                            cachedModelPath = modelPath
+                            cachedForKey = cleanKey
+                            return@withContext text.trim()
+                        }
+                    } else {
+                        lastError = "API Error (${response.code}) [$modelPath]: ${extractGoogleError(bodyStr)}"
+                        if (response.code == 400 || response.code == 403) {
+                            return@withContext lastError
+                        }
+                        // If 404 or 429, clear cache and try next model in list
+                        cachedModelPath = null
+                    }
                 }
+            } catch (e: Exception) {
+                lastError = "Network error: ${e.localizedMessage ?: "Internet check karein"}"
             }
-        } catch (e: Exception) {
-            "Network error: ${e.localizedMessage ?: "Internet check karein"}"
         }
+
+        lastError
     }
 }
