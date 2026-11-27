@@ -19,6 +19,75 @@ object GeminiClient {
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private var cachedModelPath: String? = null
+    private var cachedForKey: String? = null
+
+    private fun extractGoogleError(bodyStr: String): String {
+        return try {
+            JSONObject(bodyStr)
+                .optJSONObject("error")
+                ?.optString("message")
+                ?.takeIf { it.isNotBlank() }
+                ?: "Unknown API error"
+        } catch (_: Exception) {
+            "Invalid server response"
+        }
+    }
+
+    private fun resolveActiveModel(cleanKey: String): Pair<String?, String?> {
+        if (cachedForKey == cleanKey && cachedModelPath != null) {
+            return Pair(cachedModelPath, null)
+        }
+
+        val listRequest = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey")
+            .get()
+            .build()
+
+        return try {
+            client.newCall(listRequest).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    return Pair(null, "API Error (${response.code}): ${extractGoogleError(bodyStr)}")
+                }
+
+                val models = JSONObject(bodyStr).optJSONArray("models") ?: JSONArray()
+                var bestFlashModel: String? = null
+                var fallbackGeminiModel: String? = null
+
+                for (i in 0 until models.length()) {
+                    val obj = models.optJSONObject(i) ?: continue
+                    val name = obj.optString("name") // e.g., "models/gemini-..."
+                    val methods = obj.optJSONArray("supportedGenerationMethods")?.toString().orEmpty()
+
+                    if (methods.contains("generateContent") && name.contains("gemini", ignoreCase = true)) {
+                        if (fallbackGeminiModel == null) {
+                            fallbackGeminiModel = name
+                        }
+                        if (name.contains("flash", ignoreCase = true) &&
+                            !name.contains("lite", ignoreCase = true) &&
+                            !name.contains("image", ignoreCase = true) &&
+                            !name.contains("audio", ignoreCase = true)
+                        ) {
+                            bestFlashModel = name
+                            break
+                        }
+                    }
+                }
+
+                val selected = bestFlashModel ?: fallbackGeminiModel
+                if (selected != null) {
+                    cachedModelPath = selected
+                    cachedForKey = cleanKey
+                    Pair(selected, null)
+                } else {
+                    Pair(null, "Is API key ke liye koi supported Gemini text model nahi mila.")
+                }
+            }
+        } catch (e: Exception) {
+            Pair(null, "Network error: ${e.localizedMessage ?: "Internet check karein"}")
+        }
+    }
 
     suspend fun sendMessage(
         apiKey: String,
@@ -32,9 +101,14 @@ object GeminiClient {
             return@withContext "Pehle Settings icon par tap karke apni Gemini API key save karein."
         }
 
+        val (modelPath, resolveError) = resolveActiveModel(cleanKey)
+        if (modelPath == null) {
+            return@withContext resolveError ?: "Model load nahi ho paya."
+        }
+
         val memoryBlock = if (memories.isNotEmpty()) {
             val facts = memories.joinToString("\n") { "- ${it.fact}" }
-            "\n\nSaved personal facts about the user (use naturally when relevant):\n$facts"
+            "\n\nSaved personal facts about the user (use these naturally when relevant):\n$facts"
         } else {
             ""
         }
@@ -68,7 +142,7 @@ object GeminiClient {
             put("contents", contentsArray)
         }
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$cleanKey"
+        val url = "https://generativelanguage.googleapis.com/v1beta/$modelPath:generateContent?key=$cleanKey"
         val request = Request.Builder()
             .url(url)
             .post(requestBodyJson.toString().toRequestBody(jsonMediaType))
@@ -78,7 +152,8 @@ object GeminiClient {
             client.newCall(request).execute().use { response ->
                 val bodyStr = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    return@withContext "API Error (${response.code}): Apni API key ya internet check karein."
+                    cachedModelPath = null
+                    return@withContext "API Error (${response.code}): ${extractGoogleError(bodyStr)}"
                 }
                 val json = JSONObject(bodyStr)
                 val text = json.optJSONArray("candidates")
